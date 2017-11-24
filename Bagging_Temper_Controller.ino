@@ -10,7 +10,7 @@ TFT 2.2'' connection diagram:
 | VCC 3.3V     | VCC       | - TFT has an own LDO regulator, so 5v will work also.
 | GND          | GND       |
 | D5           | CS        | - 3.3v tolerant
-| VCC 3.3V     | RESET     | - I tried to connect it to the RESET of Arduino. Aslo worked.
+| VCC 3.3V     | RESET     | - I tried to connect it to the RESET of Arduino. Also worked.
 | D6           | D/C       | - 3.3v tolerant
 | D11          | SDI(MOSI) | - 3.3v tolerant
 | D13          | SCK       | - 3.3v tolerant
@@ -88,6 +88,7 @@ BMP085/BMP180 pressure sensor connection diagram:
 #define EEPROM_ADDR_GENESIS 100  // configuration for Genesis colors tempering
 #define EEPROM_ADDR_WING    200 // configuration for Wing tempering
 #define EEPROM_ADDR_BAGGING 300 // configuration for Wing Bagging
+#define EEPROM_ADDR_LAST_PROCESS 400 // Last running process before Watchdog reset
 
 // to identify encoder 
 #define LEFT_ENCODER   0
@@ -144,9 +145,9 @@ unsigned int programStage=0;  // program flow (start menu/set params/work...)
 
 char TempertmpString[30];  // Name of the tempering process is here
 
-const char TemperNameGenesisPGM[] PROGMEM = "Genesis Colors Tempering";
-const char TemperNameWingPGM[] PROGMEM = "Wing Tempering";
-const char BaggingNameWingPGM[] PROGMEM = "Wing Bagging";
+const char TemperNameGenesisPGM[] PROGMEM = "Temperature Control 1";
+const char TemperNameWingPGM[] PROGMEM = "Temperature Control 2";
+const char BaggingNameWingPGM[] PROGMEM = "Vacuum Bagging";
 
 //Temper variables
 unsigned long TemperTime_millis;  // var for counting Temper time (only pure tempering time)
@@ -166,7 +167,7 @@ float Temper_smoothchange;  // change in C degrees per minute
 byte Temper_sensor;  // 0 - BMPxxx, 1 - PT1000
 byte Temper_stages;  // determines do we have one stage (one temmperature), or two stages (for WING tempering)
 // default task for multitaksing:
-char TemperNameString[30] = "Wing Tempering";  // Name of the tempering process is here
+char TemperNameString[30] = "Temperature Control 2";  // Name of the tempering process is here
 int TemperEEPROMaddr = EEPROM_ADDR_WING; // Address of the settings for selected temper process
 float Temper_finishedvalue; // Here stored tmperature at proccess finish
 
@@ -183,7 +184,7 @@ int Bagging_lastgoodpressure; // This variable helps to control that pump is rea
 int Bagging_tolerance; // tolerance in witch boundaries to hold the pressure
 byte Bagging_pumpresttime; // Some pumps need a rest time between runs (about 60 sec)
 // default task for multitaksing:
-char BaggingNameString[30] = "Wing Bagging";  // Name of the tempering process is here
+char BaggingNameString[30] = "Vacuum Bagging";  // Name of the tempering process is here
 int BaggingEEPROMaddr = EEPROM_ADDR_BAGGING; // Address of the settings for selected temper process
 int Bagging_finishedvalue; // Here stored pressure at proccess finish
 
@@ -241,6 +242,12 @@ void setup()
 		BMPpressure = digitalSmooth(bmp.readPressure() / 100, BMP_SmoothArray);
     }
     PT1000_presence=getPT1000presense();
+	
+	// Resume Bagging process if it was interrupted by Watchdog (Don't yet know why Whatchdog kicks in)
+	if(EEPROM.read(EEPROM_ADDR_LAST_PROCESS)==1){
+		Bagging_started = HIGH;
+		programStage = 400; // Start Bagging
+	}
 }
 
 void loop() {
@@ -616,7 +623,7 @@ void doConfig() {
 		}
 		if(encVal==127){	// store is pressed
 			drawScreenTitle("Config - DONE!");
-			EEPROM.writeFloat(EEPROM_ADDR_VIN, Vin);
+			EEPROM.updateFloat(EEPROM_ADDR_VIN, Vin);
 			delay(1500);
 			//reboot();
 			break;	// exit after save
@@ -645,9 +652,9 @@ void doPresets() {
 		    drawScreenTitle("Presets");
 		    clearTFTScreen(); // clears everything under the Title
 		    menuShowEncoder("Select","Choose", 20, LEFT_ENCODER);
-		    menuPrintItem(1,PSTR("Genesis Colors Tempering"));
-		    menuPrintItem(2,PSTR("Wing Tempering"));
-		    menuPrintItem(3,PSTR("Wing Bagging"));
+		    menuPrintItem(1,PSTR("Temperature Control 1"));
+		    menuPrintItem(2,PSTR("Temperature Control 2"));
+		    menuPrintItem(3,PSTR("Vacuum Bagging"));
 		    menuPrintItem(4,PSTR("Config"));
 		    menuPrintItem(5,PSTR("Help"));
 		    menuPrintSelector(menuCurrentItemNr);
@@ -835,13 +842,13 @@ void doTemperTFT(char* Temper_screentitle, int Temper_eeprom) {
 					TemperTotalTime_millis = millis();
 					TemperTime_millis=0;  // reset counter for seconds (yes, it is actually seconds, not millis
 					// and store current settings in EEPROM for the future. Only store when values changed "offline"
-					EEPROM.writeLong(Temper_eeprom, Temper_totaltime);
-					EEPROM.write(Temper_eeprom + 5, Temper_temperature);
-					EEPROM.writeFloat(Temper_eeprom + 10, Temper_smoothchange);
-					EEPROM.write(Temper_eeprom + 15, Temper_sensor);
+					EEPROM.updateLong(Temper_eeprom, Temper_totaltime);
+					EEPROM.update(Temper_eeprom + 5, Temper_temperature);
+					EEPROM.updateFloat(Temper_eeprom + 10, Temper_smoothchange);
+					EEPROM.update(Temper_eeprom + 15, Temper_sensor);
 					if(Temper_stages == 2){
-						EEPROM.writeLong(Temper_eeprom + 25, Temper_stage2time);
-						EEPROM.write(Temper_eeprom + 30, Temper_stage2temperature);
+						EEPROM.updateLong(Temper_eeprom + 25, Temper_stage2time);
+						EEPROM.update(Temper_eeprom + 30, Temper_stage2temperature);
 					}
 				    #ifdef BUZZER
 						Beep(100);
@@ -1155,20 +1162,23 @@ void doBaggingTFT(char* Bagging_screentitle, int Bagging_eeprom) {
 			encVal = rotaryEncRead(RIGHT_ENCODER);  // read right encoder
 			if(encVal==127) { // button is pressed
 				// go to live data or if process is stoped then start the process.
-				if(!Bagging_started){
+				// store config allways
+				//if(!Bagging_started){
 					// ********** start the process *************
 					Bagging_started = HIGH;
+					// Store to EEPROM state of Bagging process
+					EEPROM.update(EEPROM_ADDR_LAST_PROCCESS, 1);
 					BaggingHyst_millis=millis(); // reset hyst millis to rest a pump before start
 					BaggingTime_millis=0;  // reset counter for seconds (yes, it is actually seconds, not millis
 					// and store current settings in EEPROM for the future. Only store when values changed "offline"
-					EEPROM.writeLong(Bagging_eeprom, Bagging_totaltime);
-					EEPROM.writeInt(Bagging_eeprom + 5, Bagging_pressure);
-					EEPROM.writeInt(Bagging_eeprom + 10, Bagging_tolerance);
-					EEPROM.write(Bagging_eeprom + 15, Bagging_pumpresttime);
+					EEPROM.updateLong(Bagging_eeprom, Bagging_totaltime);
+					EEPROM.updateInt(Bagging_eeprom + 5, Bagging_pressure);
+					EEPROM.updateInt(Bagging_eeprom + 10, Bagging_tolerance);
+					EEPROM.update(Bagging_eeprom + 15, Bagging_pumpresttime);
 					#ifdef BUZZER
 						Beep(100);
 					#endif
-				}
+				//}
 				drawScreenTitle(Bagging_screentitle);	// update icons
 				programStage = 410;
 			} else if(encVal!=0) {  // rotary encoder rotated
@@ -1247,6 +1257,8 @@ void doBaggingTFT(char* Bagging_screentitle, int Bagging_eeprom) {
 		encVal = rotaryEncRead(RIGHT_ENCODER);  // read left encoder
 		if(encVal==127) { // button is pressed - stop the process EMERGENCY!
 			Bagging_started = LOW;
+			// Clear running state for Bagging (no resume after Watchdog reset)
+			EEPROM.update(EEPROM_ADDR_LAST_PROCCESS, 0);
 			turnBaggingPumpOnOff(LOW);
 			programStage=400; // go to menu.
 		}
@@ -1289,6 +1301,8 @@ void doBaggingControl() {
 			} else {
 				// ************ stop process totally ****************
 				Bagging_started = LOW; 
+				// No resume after Watchdog reset
+				EEPROM.update(EEPROM_ADDR_LAST_PROCCESS, 0);
 				turnBaggingPumpOnOff(LOW);
 				BaggingIDLE_millis = millis(); // start to count IDLE time
 				Bagging_finishedvalue = BMPpressure; // Store finished value
@@ -1459,7 +1473,15 @@ ISR(WDT_vect) {
 			delay(500);
 		}	// infinite loop
 	#endif
-	while(1){}
+	delay(5*60000);	// wait 5 minutes
+	// restart
+	cli();
+	wdt_reset();
+	WDTCSR = (1<<WDCE)|(1<<WDE); //set up WDT interrupt
+	WDTCSR = (0<<WDIE)|(1<<WDE)|(1<<WDP3); //Start watchdog timer with 4s prescaller
+	sei();
+	while(1){}	// reset after 4 seconds
+
 }
 
 #ifdef BUZZER
