@@ -1,5 +1,6 @@
 //#define DEBUG
 //#define BUZZER
+#define AUTOSTARTBAGGING
 
 /*  Bagging and Tempering Controller
 
@@ -40,9 +41,6 @@ BMP085/BMP180 pressure sensor connection diagram:
     byte rotaryEncRead(rotaryNr) / return the change in the ecoder: 127 - encoder is pressed, (-100/+100) change
 */
 
-//#include <stdint.h>
-//#include ".\TFTv2_Lite\TFTv2_Lite.h"
-//#include ".\eRCaGuy_NewAnalogRead\eRCaGuy_NewAnalogRead.h"
 #include "TFTv2_Lite.h"
 #include "eRCaGuy_NewAnalogRead.h"
 #include <SPI.h>
@@ -88,7 +86,10 @@ BMP085/BMP180 pressure sensor connection diagram:
 #define EEPROM_ADDR_GENESIS 100  // configuration for Genesis colors tempering
 #define EEPROM_ADDR_WING    200 // configuration for Wing tempering
 #define EEPROM_ADDR_BAGGING 300 // configuration for Wing Bagging
-#define EEPROM_ADDR_LAST_PROCESS 400 // Last running process before Watchdog reset
+
+#ifdef AUTOSTARTBAGGING
+	#define EEPROM_ADDR_LAST_PROCESS 400 // Last running process before Watchdog reset
+#endif
 
 // to identify encoder 
 #define LEFT_ENCODER   0
@@ -243,11 +244,16 @@ void setup()
     }
     PT1000_presence=getPT1000presense();
 	
-	// Resume Bagging process if it was interrupted by Watchdog (Don't yet know why Whatchdog kicks in)
+	#ifdef AUTOSTARTBAGGING
+	// Resume Bagging process if it was interrupted by Watchdog (Seems power to the Arduino is not stable enough and pump start causes it to freeze sometimes)
 	if(EEPROM.read(EEPROM_ADDR_LAST_PROCESS)==1){
+		initializeBaggingVariables(BaggingEEPROMaddr);
+		BaggingHyst_millis=millis(); // reset hyst millis to rest a pump before start
+		BaggingTime_millis=0;  // reset counter for seconds (yes, it is actually seconds, not millis
 		Bagging_started = HIGH;
 		programStage = 400; // Start Bagging
 	}
+	#endif
 }
 
 void loop() {
@@ -1093,6 +1099,15 @@ void printNumber00(byte n) {
 
 /**************** BAGGING routines *****************/
 
+void initializeBaggingVariables(int Bagging_eeprom) {
+	Bagging_pumptime = 0;
+	// Other variables we should restore from EEPROM
+	Bagging_totaltime=menuIncDecTime(EEPROM.readLong(Bagging_eeprom), 0);
+	Bagging_pressure = EEPROM.readInt(Bagging_eeprom + 5);Bagging_pressure = constrain(Bagging_pressure, 200, 1200);
+	Bagging_tolerance = EEPROM.readInt(Bagging_eeprom + 10);Bagging_tolerance = constrain(Bagging_tolerance, 1, 240);
+	Bagging_pumpresttime = EEPROM.read(Bagging_eeprom + 15);Bagging_pumpresttime = constrain(Bagging_pumpresttime, 1, 240);
+}
+
 void doBaggingTFT(char* Bagging_screentitle, int Bagging_eeprom) {
 
 	//doBaggingControl();
@@ -1123,12 +1138,7 @@ void doBaggingTFT(char* Bagging_screentitle, int Bagging_eeprom) {
 		    menuDrawEncodersInProccess(Bagging_started);
 		    // reset(initialize) variables if process not started
 		    if(!Bagging_started){
-			    Bagging_pumptime = 0;
-			    // Other variables we should restore from EEPROM
-			    Bagging_totaltime=menuIncDecTime(EEPROM.readLong(Bagging_eeprom), 0);
-			    Bagging_pressure = EEPROM.readInt(Bagging_eeprom + 5);Bagging_pressure = constrain(Bagging_pressure, 200, 1200);
-			    Bagging_tolerance = EEPROM.readInt(Bagging_eeprom + 10);Bagging_tolerance = constrain(Bagging_tolerance, 1, 240);
-			    Bagging_pumpresttime = EEPROM.read(Bagging_eeprom + 15);Bagging_pumpresttime = constrain(Bagging_pumpresttime, 1, 240);
+			    initializeBaggingVariables(Bagging_eeprom);
 		    }
 	    	programStage=401;
   		}
@@ -1166,8 +1176,10 @@ void doBaggingTFT(char* Bagging_screentitle, int Bagging_eeprom) {
 				//if(!Bagging_started){
 					// ********** start the process *************
 					Bagging_started = HIGH;
-					// Store to EEPROM state of Bagging process
-					EEPROM.update(EEPROM_ADDR_LAST_PROCCESS, 1);
+					#ifdef AUTOSTARTBAGGING
+						// Store to EEPROM state of Bagging process
+						EEPROM.update(EEPROM_ADDR_LAST_PROCESS, 1);
+					#endif
 					BaggingHyst_millis=millis(); // reset hyst millis to rest a pump before start
 					BaggingTime_millis=0;  // reset counter for seconds (yes, it is actually seconds, not millis
 					// and store current settings in EEPROM for the future. Only store when values changed "offline"
@@ -1257,8 +1269,10 @@ void doBaggingTFT(char* Bagging_screentitle, int Bagging_eeprom) {
 		encVal = rotaryEncRead(RIGHT_ENCODER);  // read left encoder
 		if(encVal==127) { // button is pressed - stop the process EMERGENCY!
 			Bagging_started = LOW;
+			#ifdef AUTOSTARTBAGGING
 			// Clear running state for Bagging (no resume after Watchdog reset)
-			EEPROM.update(EEPROM_ADDR_LAST_PROCCESS, 0);
+			EEPROM.update(EEPROM_ADDR_LAST_PROCESS, 0);
+			#endif
 			turnBaggingPumpOnOff(LOW);
 			programStage=400; // go to menu.
 		}
@@ -1301,8 +1315,10 @@ void doBaggingControl() {
 			} else {
 				// ************ stop process totally ****************
 				Bagging_started = LOW; 
-				// No resume after Watchdog reset
-				EEPROM.update(EEPROM_ADDR_LAST_PROCCESS, 0);
+				#ifdef AUTOSTARTBAGGING
+					// No resume after Watchdog reset
+					EEPROM.update(EEPROM_ADDR_LAST_PROCESS, 0);
+				#endif
 				turnBaggingPumpOnOff(LOW);
 				BaggingIDLE_millis = millis(); // start to count IDLE time
 				Bagging_finishedvalue = BMPpressure; // Store finished value
